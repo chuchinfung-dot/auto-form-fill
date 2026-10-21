@@ -1,0 +1,37 @@
+# Virtual env / local Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Streamlit / secrets
+.streamlit/secrets.toml
+.streamlit/secrets.*
+
+# OCR / ML model caches
+.EasyOCR/
+~/.EasyOCR/
+*.pt
+*.pth
+*.onnx
+.cache/
+models/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local run artifacts
+*.log
+.tmp/
+uploads/
+output/
