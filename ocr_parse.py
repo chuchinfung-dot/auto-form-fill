@@ -126,15 +126,92 @@ def _collect_lines(ocr_results: list[tuple[Any, str, float]]) -> list[dict[str, 
         t = _clean(str(text))
         if not t or conf < 0.03:
             continue
-        y = 0.0
-        h = 0.0
+        y = h = x0 = y0 = x1 = y1 = 0.0
         try:
-            y = float(bbox[0][1])
-            h = abs(float(bbox[2][1]) - float(bbox[0][1]))
+            xs = [float(p[0]) for p in bbox]
+            ys = [float(p[1]) for p in bbox]
+            x0, x1 = min(xs), max(xs)
+            y0, y1 = min(ys), max(ys)
+            y, h = y0, max(y1 - y0, 1.0)
         except Exception:
             pass
-        lines.append({"text": t, "conf": float(conf), "y": y, "h": h})
+        lines.append(
+            {
+                "text": t,
+                "conf": float(conf),
+                "y": y,
+                "h": h,
+                "x0": x0,
+                "y0": y0,
+                "x1": x1,
+                "y1": y1,
+            }
+        )
     return lines
+
+
+LABEL_PATTERNS = {
+    "english_name": (r"^name$", r"^student\s*name$", r"^english\s*name$",
+                     r"英文名", r"英文姓名"),
+    "chinese_name": (r"^chinese\s*name$", r"^name\s*in\s*chinese$",
+                     r"中文名", r"中文姓名", r"姓名"),
+    "programme": (r"^programme", r"^program\b"),
+    "student_number": (r"^student\s*(no|number|id)\b", r"^student\s*no\.?$"),
+    "permit_number": (r"^證件號碼", r"^证件号码", r"^passport\s*no"),
+    "dob": (r"^出生日期", r"^date\s*of\s*birth", r"^dob\b"),
+    "gender": (r"^性別", r"^性别", r"^sex\b", r"^gender\b"),
+}
+
+
+def _line_height(lines: list[dict[str, Any]]) -> float:
+    hs = sorted(ln.get("h", 0) for ln in lines if ln.get("h"))
+    return hs[len(hs) // 2] if hs else 20.0
+
+
+def _row_overlap(a: dict[str, Any], b: dict[str, Any]) -> float:
+    top = max(a.get("y0", a["y"]), b.get("y0", b["y"]))
+    bottom = min(a.get("y1", a["y"] + a.get("h", 1)), b.get("y1", b["y"] + b.get("h", 1)))
+    span = min(a.get("h", 1), b.get("h", 1)) or 1
+    return max(0.0, bottom - top) / span
+
+
+def _label_lines(lines: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    pats = LABEL_PATTERNS[key]
+    return [ln for ln in lines if any(re.search(p, ln["text"].lower()) for p in pats)]
+
+
+def _value_of_label(
+    label: dict[str, Any], lines: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Prefer the text to the right on the same row, else the row below."""
+    same_row = [
+        ln
+        for ln in lines
+        if ln is not label and _row_overlap(label, ln) > 0.5
+        and ln.get("x0", 0) >= label.get("x1", 0) - 5
+    ]
+    if same_row:
+        return min(same_row, key=lambda ln: ln.get("x0", 0))
+
+    line_h = _line_height(lines)
+    below = [
+        ln
+        for ln in lines
+        if ln is not label
+        and 0 < ln.get("y0", 0) - label.get("y1", 0) < 2.5 * line_h
+    ]
+    return min(below, key=lambda ln: ln.get("y0", 0)) if below else None
+
+
+def _from_label(
+    lines: list[dict[str, Any]], key: str, accept
+) -> dict[str, Any] | None:
+    """First label row whose neighbour passes `accept`."""
+    for label in _label_lines(lines, key):
+        value = _value_of_label(label, lines)
+        if value is not None and accept(value["text"]):
+            return value
+    return None
 
 
 def _within_one_edit(a: str, b: str) -> bool:
@@ -348,7 +425,17 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
     """Heuristic parse of an IVE student card."""
     lines = _collect_lines(ocr_results)
 
-    student_number = _find_student_number(lines)
+    student_number = ""
+    sn_line = _from_label(
+        lines,
+        "student_number",
+        lambda t: bool(STUDENT_NO_RE.search(t.replace(" ", ""))
+                       or STUDENT_NO_RE.search(t.translate(_ID_REPAIR))),
+    )
+    if sn_line is not None:
+        student_number = _find_student_number([sn_line]) or ""
+    if not student_number:
+        student_number = _find_student_number(lines)
 
     name_candidates = [ln for ln in lines if _looks_like_name(ln["text"])]
     name_candidates.sort(
@@ -360,6 +447,17 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
         reverse=True,
     )
     full_name = name_candidates[0]["text"] if name_candidates else ""
+
+    # Layout wins: the value sitting beside the "Name" label on the card.
+    name_line = _from_label(
+        lines,
+        "english_name",
+        lambda t: not any("\u4e00" <= c <= "\u9fff" for c in t)
+        and sum(c.isalpha() for c in t) >= 3,
+    )
+    if name_line is not None and len(_clean(name_line["text"]).split()) >= 1:
+        full_name = name_line["text"]
+
     surname, given = split_name(full_name)
 
     programme = ""
@@ -381,7 +479,26 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
                 programme = text.title()
                 break
 
+    prog_value = _from_label(
+        lines,
+        "programme",
+        lambda t: _clean(t).lower().strip(" .:") not in _LABEL_ONLY and len(t) >= 4,
+    )
+    if prog_value is not None:
+        seed = {"text": prog_value["text"], "conf": prog_value["conf"],
+                "y": prog_value["y"], "h": prog_value.get("h", 20.0)}
+        extra = [ln for ln in lines if _looks_like_programme(ln["text"])]
+        programme = _join_programme_block([seed] + extra).title()
+
     chinese_name = _find_chinese_name(lines)
+    cn_line = _from_label(
+        lines, "chinese_name", lambda t: bool(re.search(r"[\u4e00-\u9fff]{2,4}", t))
+    )
+    if cn_line is not None:
+        m = re.search(r"[\u4e00-\u9fff]{2,4}", cn_line["text"])
+        if m and not _is_label_word(m.group(0)):
+            chinese_name = m.group(0)
+
     values = {
         "surname": surname,
         "given_name": given,
@@ -405,12 +522,46 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
 def parse_permit_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, str]:
     """Heuristic parse of a Home Return Permit (港澳居民來往內地通行證)."""
     lines = _collect_lines(ocr_results)
+
+    chinese_name = ""
+    cn = _from_label(
+        lines, "chinese_name", lambda t: bool(re.search(r"[\u4e00-\u9fff]{2,4}", t))
+    )
+    if cn is not None:
+        m = re.search(r"[\u4e00-\u9fff]{2,4}", cn["text"])
+        if m and not _is_label_word(m.group(0)):
+            chinese_name = m.group(0)
+    if not chinese_name:
+        chinese_name = _find_chinese_name(lines)
+
+    english_name = ""
+    en = _from_label(
+        lines,
+        "english_name",
+        lambda t: not any("\u4e00" <= c <= "\u9fff" for c in t)
+        and sum(c.isalpha() for c in t) >= 3,
+    )
+    if en is not None:
+        english_name = en["text"]
+    if not english_name:
+        english_name = _find_english_name(lines)
+
+    def _pick(label_key, finder, accept):
+        line = _from_label(lines, label_key, accept)
+        if line is not None:
+            got = finder([line])
+            if got:
+                return got
+        return finder(lines)
+
     values = {
-        "chinese_name": _find_chinese_name(lines),
-        "english_name": _find_english_name(lines),
-        "permit_number": _find_permit_number(lines),
-        "dob": _find_dob(lines),
-        "gender": _find_gender(lines),
+        "chinese_name": chinese_name,
+        "english_name": english_name,
+        "permit_number": _pick(
+            "permit_number", _find_permit_number, lambda t: bool(PERMIT_NO_RE.search(t))
+        ),
+        "dob": _pick("dob", _find_dob, lambda t: bool(DOB_RE.search(t))),
+        "gender": _pick("gender", _find_gender, lambda t: bool(GENDER_RE.search(t))),
     }
     return {
         **values,

@@ -4,6 +4,8 @@ Upload a **Home Return Permit (回鄉證)** and an **IVE student card** → Open
 
 ## Features
 
+- Layout-aware field extraction: values are read from beside their label
+  rather than guessed from text alone.
 - OCR two cards with RapidOCR (PP-OCRv4, ONNX) — no PyTorch required:
   - Student card → surname, given name, student number, programme, Chinese name.
   - Home Return Permit → Chinese name, English name, permit number, date of birth, gender.

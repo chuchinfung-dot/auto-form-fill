@@ -4,6 +4,8 @@ import unittest
 
 from compare import build_summary, compare_documents
 from ocr_parse import (
+    parse_card_fields,
+    parse_permit_fields,
     _find_chinese_name,
     _find_permit_number,
     _find_student_number,
@@ -73,6 +75,63 @@ class TestCompare(unittest.TestCase):
         summary = build_summary(student, permit, results)
         self.assertIn("Student card — Surname", summary["missing_fields"])
         self.assertFalse(summary["all_consistent"])
+
+
+def _mk_ocr(rows):
+    """Build EasyOCR-style results: (text, x0, y0, width, height, conf)."""
+    out = []
+    for text, x0, y0, w, h, conf in rows:
+        box = [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]]
+        out.append((box, text, conf))
+    return out
+
+
+class TestLayoutParsing(unittest.TestCase):
+    """Names come from the value beside the label, not from text heuristics."""
+
+    def test_card_ignores_card_heading_fragment(self):
+        # "Card" was split by OCR, leaving "Ard" as its own line.
+        rows = _mk_ocr([
+            ("IVE", 40, 30, 80, 40, 0.95),
+            ("STUDENT CARD", 140, 30, 300, 40, 0.95),
+            ("Ard", 500, 30, 60, 40, 0.90),
+            ("Name", 40, 200, 120, 30, 0.99),
+            ("SO LONG YIN", 380, 200, 300, 30, 0.95),
+            ("Chinese Name", 40, 300, 220, 30, 0.99),
+            ("蘇朗言", 380, 300, 150, 30, 0.95),
+            ("Student No.", 40, 400, 200, 30, 0.99),
+            ("S1234567", 380, 400, 200, 30, 0.99),
+            ("Programme", 40, 500, 180, 30, 0.99),
+            ("HIGHER DIPLOMA IN INFORMATION", 380, 500, 560, 30, 0.96),
+            ("TECHNOLOGY", 380, 545, 260, 30, 0.98),
+        ])
+        parsed = parse_card_fields(rows)
+        self.assertEqual(parsed["surname"], "So")
+        self.assertEqual(parsed["given_name"], "Long Yin")
+        self.assertEqual(parsed["chinese_name"], "蘇朗言")
+        self.assertEqual(parsed["student_number"], "S1234567")
+        self.assertEqual(parsed["programme"], "Higher Diploma In Information Technology")
+
+    def test_permit_english_name_from_label_row(self):
+        rows = _mk_ocr([
+            ("往來內地通行證", 40, 20, 320, 40, 0.95),
+            ("姓名 Name", 40, 150, 180, 30, 0.99),
+            ("蘇朗言", 380, 150, 150, 30, 0.90),
+            ("英文名 Eng", 40, 250, 200, 30, 0.98),
+            ("SO LONG YIN", 380, 250, 300, 30, 0.95),
+            ("證件號碼 No.", 40, 350, 220, 30, 0.95),
+            ("H12345678", 380, 350, 200, 30, 0.99),
+            ("出生日期 DOB", 40, 450, 240, 30, 0.99),
+            ("1990-05-12", 380, 450, 220, 30, 0.99),
+            ("性別 Sex", 40, 550, 160, 30, 0.98),
+            ("男", 380, 550, 60, 30, 0.99),
+        ])
+        parsed = parse_permit_fields(rows)
+        self.assertEqual(parsed["chinese_name"], "蘇朗言")
+        self.assertEqual(parsed["english_name"], "SO LONG YIN")
+        self.assertEqual(parsed["permit_number"], "H12345678")
+        self.assertEqual(parsed["dob"], "1990-05-12")
+        self.assertEqual(parsed["gender"], "M")
 
 
 class TestPermitParse(unittest.TestCase):
