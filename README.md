@@ -37,7 +37,7 @@ First OCR run may download EasyOCR models (English + Traditional Chinese) and ta
 | File | Role |
 | --- | --- |
 | `app.py` | Streamlit UI (upload / webcam / form / comparison) |
-| `detect.py` | OpenCV card & passport-photo crop |
+| `detect.py` | OpenCV card crop + OCR preprocessing |
 | `ocr_parse.py` | EasyOCR + field parsing (student card + permit) |
 | `compare.py` | Shared-field comparison + completeness summary |
 | `test_compare.py` | Unit tests for comparison & parsing |

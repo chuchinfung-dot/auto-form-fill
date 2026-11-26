@@ -1,4 +1,4 @@
-"""OpenCV helpers: find and crop student-card / passport-photo regions."""
+"""OpenCV helpers: find and crop card regions, and prepare them for OCR."""
 
 from __future__ import annotations
 
@@ -80,49 +80,10 @@ def detect_card_region(image: np.ndarray) -> np.ndarray | None:
     return best
 
 
-def detect_passport_photo(image: np.ndarray) -> np.ndarray | None:
-    """Find a portrait-like rectangle (taller than wide, passport proportions)."""
-    quads = _candidate_quads(image, min_area_ratio=0.01)
-    best = None
-    best_score = -1.0
-    for quad in quads:
-        crop = _four_point_transform(image, quad)
-        ch, cw = crop.shape[:2]
-        if ch < 60 or cw < 40:
-            continue
-        aspect = ch / float(cw)
-        # Passport photo ~ 4.5cm x 3.5cm → height/width ≈ 1.2–1.5
-        if 1.05 <= aspect <= 1.7:
-            score = ch * cw / (1.0 + abs(aspect - 1.29))
-            if score > best_score:
-                best_score = score
-                best = crop
-    if best is not None:
-        return best
-
-    # Fallback: largest face via Haar if available
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    cascade = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    )
-    faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
-    if len(faces) == 0:
-        return None
-    x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
-    # Expand to passport-ish crop around the face
-    pad_x = int(fw * 0.35)
-    pad_y = int(fh * 0.55)
-    x0 = max(0, x - pad_x)
-    y0 = max(0, y - pad_y)
-    x1 = min(image.shape[1], x + fw + pad_x)
-    y1 = min(image.shape[0], y + fh + int(fh * 0.25))
-    return image[y0:y1, x0:x1]
-
-
 def preprocess_for_ocr(image: np.ndarray, min_width: int = 1000) -> np.ndarray:
     """Grayscale + denoise + CLAHE contrast, upscaled if small.
 
-    Card photos are often low-contrast and small; this gives OCR a cleaner,
+    Card images are often low-contrast and small; this gives OCR a cleaner,
     larger input. Returns a single-channel image.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
