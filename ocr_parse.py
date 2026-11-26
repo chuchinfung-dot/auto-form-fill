@@ -1,12 +1,14 @@
-"""OCR student card text and parse into form fields."""
+"""OCR: student card and Home Return Permit recognition + field parsing.
+
+Student card      -> surname, given_name, student_number, programme, chinese_name.
+Home Return Permit -> chinese_name, english_name, permit_number, dob, gender.
+"""
 
 from __future__ import annotations
 
 import re
 from functools import lru_cache
 from typing import Any
-
-import numpy as np
 
 
 PROGRAMME_HINTS = (
@@ -36,26 +38,33 @@ PROGRAMME_HINTS = (
 SKIP_LINE_PATTERNS = re.compile(
     r"(student\s*card|hong\s*kong|institute|vocational|education|"
     r"ive\b|vtc|valid|expiry|issue|date|name|number|programme|"
-    r"program|undertaking|surname|given)",
+    r"program|undertaking|surname|given|permit|home\s*return)",
     re.I,
 )
 
-STUDENT_NO_RE = re.compile(
-    r"\b([A-Z]{1,4}\d{6,10})\b|\b(\d{8,12})\b",
-    re.I,
+CHINESE_LABELS = re.compile(
+    r"(姓名|出生|日期|性別|簽發|有效期|證件|號碼|通行證|來往|港澳|"
+    r"回鄉|居民|內地|中華|人民|共和國|公安部|出入境|管理局|持證人|本證|證號)"
 )
+
+STUDENT_NO_RE = re.compile(r"\b([A-Z]{1,4}\d{6,10})\b|\b(\d{8,12})\b", re.I)
+PERMIT_NO_RE = re.compile(r"\b([A-Z]\d{7,9})\b")
+DOB_RE = re.compile(
+    r"(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})"
+    r"|(\d{1,2})\s*[-/.]\s*(\d{1,2})\s*[-/.]\s*(\d{4})"
+)
+GENDER_RE = re.compile(r"^(男|女|M|F)$", re.I)
 
 
 @lru_cache(maxsize=1)
 def get_reader():
     import easyocr
 
-    # English only for IVE English fields; first call downloads models.
-    return easyocr.Reader(["en"], gpu=False, verbose=False)
+    # English + Traditional Chinese (the permit is in Traditional Chinese).
+    return easyocr.Reader(["en", "ch_tra"], gpu=False, verbose=False)
 
 
-def run_ocr(image_bgr: np.ndarray) -> list[tuple[Any, str, float]]:
-    """Return EasyOCR results: (bbox, text, confidence)."""
+def run_ocr(image_bgr) -> list[tuple[Any, str, float]]:
     reader = get_reader()
     rgb = image_bgr[:, :, ::-1]
     return reader.readtext(rgb)
@@ -65,13 +74,26 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _collect_lines(ocr_results: list[tuple[Any, str, float]]) -> list[dict[str, Any]]:
+    lines = []
+    for bbox, text, conf in ocr_results:
+        t = _clean(str(text))
+        if not t or conf < 0.15:
+            continue
+        y = 0.0
+        try:
+            y = float(bbox[0][1])
+        except Exception:
+            pass
+        lines.append({"text": t, "conf": float(conf), "y": y})
+    return lines
+
+
 def _looks_like_name(text: str) -> bool:
     t = _clean(text)
     if len(t) < 3 or len(t) > 60:
         return False
     if SKIP_LINE_PATTERNS.search(t):
-        return False
-    if STUDENT_NO_RE.search(t) and not re.search(r"[A-Za-z]{2,}", t.replace(STUDENT_NO_RE.search(t).group(0), "")):
         return False
     letters = sum(c.isalpha() for c in t)
     if letters < 3:
@@ -79,8 +101,7 @@ def _looks_like_name(text: str) -> bool:
     words = t.split()
     if not (1 <= len(words) <= 5):
         return False
-    # Prefer ALL-CAPS or Title Case English names
-    return all(w.replace("-", "").isalpha() for w in words)
+    return all(w.replace("-", "").replace("'", "").isalpha() for w in words)
 
 
 def _looks_like_programme(text: str) -> bool:
@@ -93,7 +114,6 @@ def _looks_like_programme(text: str) -> bool:
 
 
 def split_name(full_name: str) -> tuple[str, str]:
-    """IVE-style English name: first token = surname (often CAPS)."""
     parts = _clean(full_name).split()
     if not parts:
         return "", ""
@@ -104,45 +124,101 @@ def split_name(full_name: str) -> tuple[str, str]:
     return surname, given
 
 
-def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, str]:
-    """Heuristic parse → Surname, Given name, Student number, Programme."""
-    lines = []
-    for _bbox, text, conf in ocr_results:
-        t = _clean(str(text))
-        if not t or conf < 0.15:
-            continue
-        lines.append((t, float(conf)))
-
-    student_number = ""
-    for text, conf in sorted(lines, key=lambda x: -x[1]):
-        m = STUDENT_NO_RE.search(text.replace(" ", ""))
-        if not m:
-            m = STUDENT_NO_RE.search(text)
+def _find_student_number(lines: list[dict[str, Any]]) -> str:
+    for ln in sorted(lines, key=lambda x: -x["conf"]):
+        m = STUDENT_NO_RE.search(ln["text"].replace(" ", "")) or STUDENT_NO_RE.search(
+            ln["text"]
+        )
         if m:
-            student_number = (m.group(1) or m.group(2)).upper()
-            break
+            return (m.group(1) or m.group(2)).upper()
+    return ""
 
-    name_candidates = [(t, c) for t, c in lines if _looks_like_name(t)]
-    # Prefer lines that look like SURNAME Given Names (first word all caps)
-    name_candidates.sort(
+
+def _find_permit_number(lines: list[dict[str, Any]]) -> str:
+    for ln in sorted(lines, key=lambda x: -x["conf"]):
+        m = PERMIT_NO_RE.search(ln["text"].replace(" ", "")) or PERMIT_NO_RE.search(
+            ln["text"]
+        )
+        if m:
+            return m.group(1).upper()
+    return ""
+
+
+def _find_chinese_name(lines: list[dict[str, Any]]) -> str:
+    cands = []
+    for ln in lines:
+        for m in re.finditer(r"[\u4e00-\u9fff]{2,4}", ln["text"]):
+            token = m.group(0)
+            if CHINESE_LABELS.search(token):
+                continue
+            cands.append((ln["y"], -ln["conf"], token))
+    if not cands:
+        return ""
+    cands.sort(key=lambda x: (x[0], x[1]))
+    return cands[0][2]
+
+
+def _find_english_name(lines: list[dict[str, Any]]) -> str:
+    cands = [ln for ln in lines if _looks_like_name(ln["text"])]
+    if not cands:
+        return ""
+    cands.sort(
         key=lambda x: (
-            1 if x[0].split()[0].isupper() and len(x[0].split()[0]) > 1 else 0,
-            x[1],
-            len(x[0]),
+            1 if (x["text"].split()[0].isupper() and len(x["text"].split()[0]) > 1) else 0,
+            x["conf"],
+            len(x["text"]),
         ),
         reverse=True,
     )
-    full_name = name_candidates[0][0] if name_candidates else ""
+    return cands[0]["text"]
+
+
+def _find_dob(lines: list[dict[str, Any]]) -> str:
+    for ln in lines:
+        m = DOB_RE.search(ln["text"])
+        if m:
+            return m.group(0)
+    return ""
+
+
+def _find_gender(lines: list[dict[str, Any]]) -> str:
+    for ln in lines:
+        m = GENDER_RE.search(ln["text"])
+        if m:
+            g = m.group(0).upper()
+            if g in ("男", "M"):
+                return "M"
+            if g in ("女", "F"):
+                return "F"
+    return ""
+
+
+def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, str]:
+    """Heuristic parse of an IVE student card."""
+    lines = _collect_lines(ocr_results)
+
+    student_number = _find_student_number(lines)
+
+    name_candidates = [ln for ln in lines if _looks_like_name(ln["text"])]
+    name_candidates.sort(
+        key=lambda x: (
+            1 if (x["text"].split()[0].isupper() and len(x["text"].split()[0]) > 1) else 0,
+            x["conf"],
+            len(x["text"]),
+        ),
+        reverse=True,
+    )
+    full_name = name_candidates[0]["text"] if name_candidates else ""
     surname, given = split_name(full_name)
 
     programme = ""
-    prog_cands = [(t, c) for t, c in lines if _looks_like_programme(t)]
+    prog_cands = [ln for ln in lines if _looks_like_programme(ln["text"])]
     if prog_cands:
-        prog_cands.sort(key=lambda x: (x[1], len(x[0])), reverse=True)
-        programme = prog_cands[0][0].title()
+        prog_cands.sort(key=lambda x: (x["conf"], len(x["text"])), reverse=True)
+        programme = prog_cands[0]["text"].title()
     else:
-        # Fallback: longest non-name, non-number alphabetic line
-        for text, conf in sorted(lines, key=lambda x: (-len(x[0]), -x[1])):
+        for ln in sorted(lines, key=lambda x: (-len(x["text"]), -x["conf"])):
+            text = ln["text"]
             if SKIP_LINE_PATTERNS.search(text):
                 continue
             if text.upper() == student_number or text.upper().replace(" ", "") == student_number:
@@ -158,10 +234,27 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
         "given_name": given,
         "student_number": student_number,
         "programme": programme,
-        "raw_lines": [t for t, _ in lines],
+        "chinese_name": _find_chinese_name(lines),
+        "raw_lines": [ln["text"] for ln in lines],
     }
 
 
-def ocr_and_parse(image_bgr: np.ndarray) -> dict[str, str]:
-    results = run_ocr(image_bgr)
-    return parse_card_fields(results)
+def parse_permit_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, str]:
+    """Heuristic parse of a Home Return Permit (港澳居民來往內地通行證)."""
+    lines = _collect_lines(ocr_results)
+    return {
+        "chinese_name": _find_chinese_name(lines),
+        "english_name": _find_english_name(lines),
+        "permit_number": _find_permit_number(lines),
+        "dob": _find_dob(lines),
+        "gender": _find_gender(lines),
+        "raw_lines": [ln["text"] for ln in lines],
+    }
+
+
+def ocr_and_parse(image_bgr) -> dict[str, str]:
+    return parse_card_fields(run_ocr(image_bgr))
+
+
+def ocr_and_parse_permit(image_bgr) -> dict[str, str]:
+    return parse_permit_fields(run_ocr(image_bgr))
