@@ -80,22 +80,30 @@ def detect_card_region(image: np.ndarray) -> np.ndarray | None:
     return best
 
 
-def preprocess_for_ocr(image: np.ndarray, min_width: int = 1000) -> np.ndarray:
-    """Grayscale + denoise + CLAHE contrast, upscaled if small.
+def preprocess_for_ocr(
+    image: np.ndarray, upscale: float = 2.0, min_width: int = 1600
+) -> np.ndarray:
+    """Grayscale -> denoise -> upscale -> CLAHE contrast.
 
-    Card images are often low-contrast and small; this gives OCR a cleaner,
-    larger input. Returns a single-channel image.
+    Card photos are usually blurred, tilted, and low-contrast compared with a
+    scan. Denoising removes JPEG grain before it is amplified, upscaling gives
+    the recogniser more pixels per glyph (which restores word spacing), and
+    CLAHE evens out glare. Returns a single-channel image.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
 
+    gray = cv2.fastNlMeansDenoising(
+        gray, None, h=7, templateWindowSize=7, searchWindowSize=21
+    )
+
     h, w = gray.shape[:2]
-    if w < min_width:
-        scale = min_width / float(max(w, 1))
+    target_w = max(int(w * upscale), min_width)
+    if target_w > w:
+        scale = target_w / float(w)
         gray = cv2.resize(
-            gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC
+            gray, (target_w, int(h * scale)), interpolation=cv2.INTER_CUBIC
         )
 
-    gray = cv2.fastNlMeansDenoising(gray, None, h=7, templateWindowSize=7, searchWindowSize=21)
     clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
     return clahe.apply(gray)
 

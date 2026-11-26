@@ -62,6 +62,10 @@ CHINESE_LABEL_WORDS = {
     "有效期", "往來", "內地", "通行證", "往來內地通行證", "港澳居民",
     "港澳居民來往內地通行證", "居民", "中華人民共和國", "公安部", "出入境",
     "管理局", "持證人", "本證", "證號", "男", "女",
+    # simplified variants (PP-OCR sometimes emits these for traditional text)
+    "内地", "通行证", "往来", "证件", "号码", "性别", "签发", "有效期",
+    "居民", "中华", "人民", "共和国", "出生", "日期", "姓名", "英文名",
+    "中文名", "往来内地通行证", "港澳居民",
 }
 
 # Lines that are field labels, not values.
@@ -81,22 +85,25 @@ GENDER_RE = re.compile(r"^(男|女|M|F)$", re.I)
 
 @lru_cache(maxsize=1)
 def get_reader():
-    import easyocr
+    """PP-OCRv4 via onnxruntime: strong on both Latin and CJK, no PyTorch needed."""
+    from rapidocr_onnxruntime import RapidOCR
 
-    # English + Traditional Chinese (the permit is in Traditional Chinese).
-    return easyocr.Reader(["en", "ch_tra"], gpu=False, verbose=False)
+    return RapidOCR(params={"Global.print_verbose": False})
 
 
 def run_ocr(image_bgr) -> list[tuple[Any, str, float]]:
-    """Return EasyOCR results: (bbox, text, confidence)."""
+    """Return OCR results as (bbox, text, confidence)."""
     import cv2
 
     from detect import preprocess_for_ocr
 
     prepared = preprocess_for_ocr(image_bgr)
     prepared = cv2.cvtColor(prepared, cv2.COLOR_GRAY2BGR)
-    reader = get_reader()
-    return reader.readtext(prepared)
+
+    results, _elapsed = get_reader()(prepared)
+    if not results:
+        return []
+    return [(item[0], str(item[1]), float(item[2])) for item in results]
 
 
 def _clean(text: str) -> str:
@@ -110,17 +117,22 @@ def _collect_lines(ocr_results: list[tuple[Any, str, float]]) -> list[dict[str, 
         if not t or conf < 0.03:
             continue
         y = 0.0
+        h = 0.0
         try:
             y = float(bbox[0][1])
+            h = abs(float(bbox[2][1]) - float(bbox[0][1]))
         except Exception:
             pass
-        lines.append({"text": t, "conf": float(conf), "y": y})
+        lines.append({"text": t, "conf": float(conf), "y": y, "h": h})
     return lines
 
 
 def _looks_like_name(text: str) -> bool:
     t = _clean(text)
     if len(t) < 3 or len(t) > 60:
+        return False
+    # English names are ASCII only: "出生日期DOB" is a label, not a name.
+    if any("\u4e00" <= c <= "\u9fff" for c in t):
         return False
     if SKIP_LINE_PATTERNS.search(t):
         return False
@@ -130,7 +142,13 @@ def _looks_like_name(text: str) -> bool:
     words = t.split()
     if not (1 <= len(words) <= 5):
         return False
-    return all(w.replace("-", "").replace("'", "").isalpha() for w in words)
+    if any(len(w) > 14 for w in words):
+        return False
+    # "TECHNOLOGY", "INFORMATION" are programme words, not surnames.
+    if any(h in t.lower() for h in PROGRAMME_HINTS):
+        return False
+    return all(w.replace("-", "").replace("'", "").isascii() and
+               w.replace("-", "").replace("'", "").isalpha() for w in words)
 
 
 def _looks_like_programme(text: str) -> bool:
@@ -186,6 +204,10 @@ def _is_label_word(token: str) -> bool:
 def _find_chinese_name(lines: list[dict[str, Any]]) -> str:
     cands = []
     for ln in lines:
+        cjk_chars = re.findall(r"[\u4e00-\u9fff]", ln["text"])
+        # A long run of Han characters is a title/label line, never a name.
+        if len(cjk_chars) > 5:
+            continue
         for m in re.finditer(r"[\u4e00-\u9fff]{2,4}", ln["text"]):
             token = m.group(0)
             if _is_label_word(token):
@@ -255,8 +277,14 @@ def _conf_for(value: str, lines: list[dict[str, Any]], default: float = 0.0) -> 
     return min(confs) if confs else default
 
 
-def _join_programme_block(cands: list[dict[str, Any]], max_gap: float = 80.0) -> str:
+def _join_programme_block(cands: list[dict[str, Any]]) -> str:
     """A programme title may wrap across lines; join the strongest block."""
+    heights = sorted(c["h"] for c in cands if c.get("h"))
+    line_h = heights[len(heights) // 2] if heights else 20.0
+    # Wrapped lines sit closer than field rows but detection boxes under-report
+    # height on tilted/skewed crops, so stay generous. Only programme-like
+    # lines are candidates, so over-merging other fields is not possible.
+    max_gap = max(line_h * 4.0, 60.0)
     ordered = sorted(cands, key=lambda x: x["y"])
     blocks: list[list[dict[str, Any]]] = [[ordered[0]]]
     for ln in ordered[1:]:

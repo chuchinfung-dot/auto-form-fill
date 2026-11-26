@@ -7,6 +7,7 @@ from ocr_parse import (
     _find_chinese_name,
     _find_permit_number,
     _find_student_number,
+    _looks_like_name,
     _looks_like_programme,
     split_name,
 )
@@ -84,6 +85,21 @@ class TestPermitParse(unittest.TestCase):
     def test_chinese_name_skips_label_words(self):
         lines = _mk_lines(["英文名", "陳大明"])
         self.assertEqual(_find_chinese_name(lines), "陳大明")
+
+    def test_chinese_name_skips_title_line(self):
+        # The document title has too many Han characters to be a name.
+        lines = _mk_lines(["往來内地通行證", "陳大明"])
+        self.assertEqual(_find_chinese_name(lines), "陳大明")
+
+    def test_programme_word_is_not_a_name(self):
+        # "TECHNOLOGY" passed as a name before programme words were excluded.
+        self.assertFalse(_looks_like_name("TECHNOLOGY"))
+        self.assertFalse(_looks_like_name("INFORMATION"))
+        self.assertTrue(_looks_like_name("CHAN TAI MAN"))
+
+    def test_cjk_line_is_not_an_english_name(self):
+        # "出生日期DOB" is a label, not a name.
+        self.assertFalse(_looks_like_name("出生日期DOB"))
 
 
 if __name__ == "__main__":
