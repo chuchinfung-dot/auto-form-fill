@@ -7,7 +7,9 @@ Upload a **Home Return Permit (回鄉證)** and an **IVE student card** → Open
 - OCR two cards:
   - Student card → surname, given name, student number, programme, Chinese name.
   - Home Return Permit → Chinese name, English name, permit number, date of birth, gender.
+- OpenCV preprocessing for OCR (grayscale, denoise, CLAHE contrast, upscale).
 - Compare shared fields (English name, Chinese name) and flag **match / mismatch / missing**.
+- Flag low-confidence OCR values for human review.
 - Completeness summary listing missing or unreadable fields.
 - Editable form + printable HTML export.
 

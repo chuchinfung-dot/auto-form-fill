@@ -3,7 +3,13 @@
 import unittest
 
 from compare import build_summary, compare_documents
-from ocr_parse import _find_chinese_name, _find_permit_number, split_name
+from ocr_parse import (
+    _find_chinese_name,
+    _find_permit_number,
+    _find_student_number,
+    _looks_like_programme,
+    split_name,
+)
 
 
 def _mk_lines(items):
@@ -65,6 +71,19 @@ class TestPermitParse(unittest.TestCase):
 
     def test_split_name(self):
         self.assertEqual(split_name("CHAN TAI MAN"), ("Chan", "Tai Man"))
+
+    def test_student_number_repairs_dollar_prefix(self):
+        # OCR reads "S1234567" as "$1234567" on the student card.
+        self.assertEqual(_find_student_number(_mk_lines(["$1234567"])), "S1234567")
+
+    def test_programme_label_is_not_a_value(self):
+        self.assertFalse(_looks_like_programme("Programme"))
+        self.assertFalse(_looks_like_programme("Programme undertaking"))
+        self.assertTrue(_looks_like_programme("HIGHER DIPLOMA IN INFORMATION TECHNOLOGY"))
+
+    def test_chinese_name_skips_label_words(self):
+        lines = _mk_lines(["英文名", "陳大明"])
+        self.assertEqual(_find_chinese_name(lines), "陳大明")
 
 
 if __name__ == "__main__":

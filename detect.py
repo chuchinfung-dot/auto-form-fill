@@ -119,6 +119,26 @@ def detect_passport_photo(image: np.ndarray) -> np.ndarray | None:
     return image[y0:y1, x0:x1]
 
 
+def preprocess_for_ocr(image: np.ndarray, min_width: int = 1000) -> np.ndarray:
+    """Grayscale + denoise + CLAHE contrast, upscaled if small.
+
+    Card photos are often low-contrast and small; this gives OCR a cleaner,
+    larger input. Returns a single-channel image.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+
+    h, w = gray.shape[:2]
+    if w < min_width:
+        scale = min_width / float(max(w, 1))
+        gray = cv2.resize(
+            gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC
+        )
+
+    gray = cv2.fastNlMeansDenoising(gray, None, h=7, templateWindowSize=7, searchWindowSize=21)
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    return clahe.apply(gray)
+
+
 def bgr_to_rgb(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 

@@ -25,7 +25,6 @@ st.markdown(
 <style>
   .main-title { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem; }
   .sub { color: #555; margin-bottom: 1.25rem; }
-  .form-card { background: #fafafa; border: 1px solid #d0d0d0; border-radius: 8px; padding: 1.5rem 1.75rem; }
   .form-heading { font-size: 1.35rem; font-weight: 700; border-bottom: 2px solid #222; padding-bottom: 0.4rem; margin-bottom: 1rem; }
   .ok { color: #0a7d33; font-weight: 700; }
   .bad { color: #b00020; font-weight: 700; }
@@ -51,7 +50,23 @@ DEFAULTS: dict[str, Any] = {
     "permit_rgb": None,
     "raw_lines_card": [],
     "raw_lines_permit": [],
+    "confidence_card": {},
+    "confidence_permit": {},
+    "low_conf_card": [],
+    "low_conf_permit": [],
     "ocr_done": False,
+}
+
+FIELD_LABELS = {
+    "surname": "Surname",
+    "given_name": "Given name",
+    "student_number": "Student number",
+    "programme": "Programme",
+    "chinese_name": "Chinese name",
+    "english_name": "English name",
+    "permit_number": "Permit number",
+    "dob": "Date of birth",
+    "gender": "Gender",
 }
 
 
@@ -106,6 +121,8 @@ def _run_ocr_on_cards(card_bgr, permit_bgr) -> None:
     st.session_state.programme = card.get("programme", "")
     st.session_state.student_chinese_name = card.get("chinese_name", "")
     st.session_state.raw_lines_card = card.get("raw_lines", [])
+    st.session_state.confidence_card = card.get("confidence", {})
+    st.session_state.low_conf_card = card.get("low_confidence", [])
     st.session_state.card_rgb = bgr_to_rgb(card_bgr)
 
     if permit_bgr is not None:
@@ -115,6 +132,8 @@ def _run_ocr_on_cards(card_bgr, permit_bgr) -> None:
         st.session_state.dob = permit.get("dob", "")
         st.session_state.gender = permit.get("gender", "")
         st.session_state.raw_lines_permit = permit.get("raw_lines", [])
+        st.session_state.confidence_permit = permit.get("confidence", {})
+        st.session_state.low_conf_permit = permit.get("low_confidence", [])
         st.session_state.permit_rgb = bgr_to_rgb(permit_bgr)
 
     st.session_state.ocr_done = True
@@ -238,7 +257,6 @@ def _render_inputs() -> None:
 
 def _render_form_and_comparison() -> None:
     st.subheader("2. Student registration form")
-    st.markdown('<div class="form-card">', unsafe_allow_html=True)
     st.markdown('<div class="form-heading">Student registration form</div>', unsafe_allow_html=True)
 
     form_l, form_r = st.columns([1.4, 1])
@@ -281,8 +299,6 @@ def _render_form_and_comparison() -> None:
         st.text_input("Permit number", key="permit_number")
         st.text_input("Date of birth", key="dob")
         st.text_input("Gender", key="gender")
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
     photo_data_uri = ""
     if st.session_state.photo_rgb is not None:
@@ -327,6 +343,22 @@ def _render_form_and_comparison() -> None:
 
     if st.session_state.ocr_done:
         st.subheader("3. Field comparison & summary")
+
+        low_lines = [
+            f"Student card — {FIELD_LABELS.get(k, k)}"
+            f" ({st.session_state.confidence_card.get(k, 0):.0%} confidence)"
+            for k in st.session_state.low_conf_card
+        ] + [
+            f"Permit — {FIELD_LABELS.get(k, k)}"
+            f" ({st.session_state.confidence_permit.get(k, 0):.0%} confidence)"
+            for k in st.session_state.low_conf_permit
+        ]
+        if low_lines:
+            st.warning(
+                "Low OCR confidence — please check these values against the images:\n\n"
+                + "\n".join(f"- {item}" for item in low_lines)
+            )
+
         student = _student_record()
         permit = _permit_record()
         results = compare_documents(student, permit)
