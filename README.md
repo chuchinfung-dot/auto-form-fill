@@ -39,7 +39,7 @@ OCR runs on CPU through onnxruntime; models ship with the package.
 
 | File | Role |
 | --- | --- |
-| `app.py` | Streamlit UI (upload / webcam / form / comparison) |
+| `app.py` | Streamlit desktop UI (upload / form / comparison) |
 | `detect.py` | OpenCV card crop + OCR preprocessing |
 | `ocr_parse.py` | RapidOCR + field parsing (student card + permit) |
 | `compare.py` | Shared-field comparison + completeness summary |

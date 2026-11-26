@@ -129,83 +129,58 @@ def _run_ocr_on_cards(card_bgr, permit_bgr) -> None:
 
 def _render_inputs() -> None:
     st.subheader("1. Inputs")
-    tab_upload, tab_cam = st.tabs(["Upload images", "Webcam (optional)"])
 
-    with tab_upload:
-        card_file = st.file_uploader(
-            "Student card (full card or pre-cropped)",
-            type=["jpg", "jpeg", "png", "webp", "bmp"],
-            key="card_up",
-        )
-        permit_file = st.file_uploader(
-            "Home Return Permit (回鄉證)",
-            type=["jpg", "jpeg", "png", "webp", "bmp"],
-            key="permit_up",
-        )
-        scene_file = st.file_uploader(
-            "Optional: one scene with both cards (auto-detect)",
-            type=["jpg", "jpeg", "png", "webp", "bmp"],
-            key="scene_up",
-        )
+    card_file = st.file_uploader(
+        "Student card (full card or pre-cropped)",
+        type=["jpg", "jpeg", "png", "webp", "bmp"],
+        key="card_up",
+    )
+    permit_file = st.file_uploader(
+        "Home Return Permit (回鄉證)",
+        type=["jpg", "jpeg", "png", "webp", "bmp"],
+        key="permit_up",
+    )
+    scene_file = st.file_uploader(
+        "Optional: one scene with both cards (auto-detect)",
+        type=["jpg", "jpeg", "png", "webp", "bmp"],
+        key="scene_up",
+    )
 
-        c1, c2 = st.columns(2)
-        with c1:
-            try_detect = st.checkbox("Auto-detect / crop regions", value=True)
-        with c2:
-            run_btn = st.button("Process & fill form", type="primary", width="stretch")
+    c1, c2 = st.columns(2)
+    with c1:
+        try_detect = st.checkbox("Auto-detect / crop regions", value=True)
+    with c2:
+        run_btn = st.button("Process & fill form", type="primary", width="stretch")
 
-        if run_btn:
-            card_bgr = _bytes_to_bgr(card_file)
-            permit_bgr = _bytes_to_bgr(permit_file)
-            scene_bgr = _bytes_to_bgr(scene_file)
+    if run_btn:
+        card_bgr = _bytes_to_bgr(card_file)
+        permit_bgr = _bytes_to_bgr(permit_file)
+        scene_bgr = _bytes_to_bgr(scene_file)
 
-            if scene_bgr is not None and try_detect and card_bgr is None:
-                card_crop = detect_card_region(scene_bgr)
-                if card_crop is not None:
-                    card_bgr = card_crop
-                    st.info("Detected student-card region from scene.")
+        if scene_bgr is not None and try_detect and card_bgr is None:
+            card_crop = detect_card_region(scene_bgr)
+            if card_crop is not None:
+                card_bgr = card_crop
+                st.info("Detected student-card region from scene.")
 
-            for name, key in (("student card", "card"), ("permit", "permit")):
-                img = card_bgr if key == "card" else permit_bgr
-                if img is None or not try_detect:
-                    continue
-                refined = detect_card_region(img)
-                if refined is not None and refined.size < img.size * 0.95:
-                    if key == "card":
-                        card_bgr = refined
-                    else:
-                        permit_bgr = refined
-
-            if card_bgr is None:
-                st.error("Please upload a student card (or a scene containing one).")
-            else:
-                _run_ocr_on_cards(card_bgr, permit_bgr)
-                if permit_bgr is None:
-                    st.warning("No Home Return Permit provided — comparison needs both cards.")
-                st.success("OCR complete — review / edit on the right.")
-
-    with tab_cam:
-        st.caption("Uses the browser camera if available on this Mac.")
-        cam_card = st.camera_input("Capture student card")
-        cam_permit = st.camera_input("Capture Home Return Permit")
-        if st.button("Use webcam captures", width="stretch"):
-            card_bgr = None
-            permit_bgr = None
-            if cam_card is not None:
-                card_bgr = decode_upload(cam_card.getvalue())
-                refined = detect_card_region(card_bgr)
-                if refined is not None:
+        for key in ("card", "permit"):
+            img = card_bgr if key == "card" else permit_bgr
+            if img is None or not try_detect:
+                continue
+            refined = detect_card_region(img)
+            if refined is not None and refined.size < img.size * 0.95:
+                if key == "card":
                     card_bgr = refined
-            if cam_permit is not None:
-                permit_bgr = decode_upload(cam_permit.getvalue())
-                refined_p = detect_card_region(permit_bgr)
-                if refined_p is not None:
-                    permit_bgr = refined_p
-            if card_bgr is not None:
-                _run_ocr_on_cards(card_bgr, permit_bgr)
-                st.success("Webcam card(s) processed.")
-            else:
-                st.warning("Capture a student card first.")
+                else:
+                    permit_bgr = refined
+
+        if card_bgr is None:
+            st.error("Please upload a student card (or a scene containing one).")
+        else:
+            _run_ocr_on_cards(card_bgr, permit_bgr)
+            if permit_bgr is None:
+                st.warning("No Home Return Permit provided — comparison needs both cards.")
+            st.success("OCR complete — review / edit on the right.")
 
     if st.session_state.card_rgb is not None:
         st.markdown("**Student-card crop used for OCR**")
