@@ -245,8 +245,27 @@ def _is_label_like(word: str) -> bool:
     return any(_within_one_edit(w, lbl) for lbl in LABEL_WORDS)
 
 
+def _split_camel(word: str) -> list[str]:
+    """SO LongYin -> ['SO', 'Long', 'Yin'] (OCR drops the inner space)."""
+    parts = re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z]*|[a-z]+", word)
+    return parts or [word]
+
+
+def _normalize_name_text(text: str) -> str:
+    """Repair punctuation and missing spaces in an OCR'd Latin name."""
+    t = re.sub(r"[,;:]+", " ", _clean(text))
+    t = re.sub(r"\s+", " ", t).strip()
+    words: list[str] = []
+    for w in t.split():
+        if re.search(r"[a-z][A-Z]", w):
+            words.extend(_split_camel(w))
+        else:
+            words.append(w)
+    return " ".join(words)
+
+
 def _looks_like_name(text: str) -> bool:
-    t = _clean(text)
+    t = _normalize_name_text(text)
     if len(t) < 3 or len(t) > 60:
         return False
     # English names are ASCII only: "出生日期DOB" is a label, not a name.
@@ -341,6 +360,28 @@ def _find_chinese_name(lines: list[dict[str, Any]]) -> str:
     return cands[0][2]
 
 
+def _latin_name_near_cjk(
+    lines: list[dict[str, Any]], anchor: dict[str, Any] | None
+) -> str:
+    """These cards print no label: the Latin name sits beside the Chinese one."""
+    cands = []
+    for ln in lines:
+        if ln is anchor:
+            continue
+        text = _normalize_name_text(ln["text"])
+        if not _looks_like_name(text):
+            continue
+        if anchor is not None:
+            dist = abs(ln.get("y0", ln["y"]) - anchor.get("y0", anchor["y"]))
+        else:
+            dist = ln.get("y0", ln["y"])
+        cands.append((dist, ln, text))
+    if not cands:
+        return ""
+    cands.sort(key=lambda x: x[0])
+    return cands[0][2]
+
+
 def _find_english_name(lines: list[dict[str, Any]]) -> str:
     cands = [ln for ln in lines if _looks_like_name(ln["text"])]
     if not cands:
@@ -353,7 +394,7 @@ def _find_english_name(lines: list[dict[str, Any]]) -> str:
         ),
         reverse=True,
     )
-    return cands[0]["text"]
+    return _normalize_name_text(cands[0]["text"])
 
 
 def _find_dob(lines: list[dict[str, Any]]) -> str:
@@ -383,7 +424,9 @@ def _conf_for(value: str, lines: list[dict[str, Any]], default: float = 0.0) -> 
     """Best-effort confidence of the OCR line(s) that produced a parsed value."""
     if not value:
         return 0.0
-    key = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", value.lower())
+    # Gender is normalised to M/F but printed as 男/女.
+    alias = {"M": "男", "F": "女"}.get(value.upper(), value)
+    key = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", alias.lower())
     if not key:
         return default
     for ln in lines:
@@ -448,22 +491,33 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
     )
     full_name = name_candidates[0]["text"] if name_candidates else ""
 
-    # Layout wins: the value sitting beside the "Name" label on the card.
+    # Layout wins: the value sitting beside the "Name" label, when there is one.
     name_line = _from_label(
         lines,
         "english_name",
         lambda t: not any("\u4e00" <= c <= "\u9fff" for c in t)
         and sum(c.isalpha() for c in t) >= 3,
     )
-    if name_line is not None and len(_clean(name_line["text"]).split()) >= 1:
-        full_name = name_line["text"]
+    if name_line is not None:
+        full_name = _normalize_name_text(name_line["text"])
+    else:
+        # IVE cards print no label: the Latin name sits beside the Chinese one.
+        anchor = _from_label(
+            lines,
+            "chinese_name",
+            lambda t: bool(re.search(r"[\u4e00-\u9fff]{2,4}", t)),
+        )
+        near = _latin_name_near_cjk(lines, anchor)
+        if near:
+            full_name = near
 
+    full_name = _normalize_name_text(full_name)
     surname, given = split_name(full_name)
 
     programme = ""
     prog_cands = [ln for ln in lines if _looks_like_programme(ln["text"])]
     if prog_cands:
-        programme = _join_programme_block(prog_cands).title()
+        programme = _join_programme_block(prog_cands)
     else:
         for ln in sorted(lines, key=lambda x: (-len(x["text"]), -x["conf"])):
             text = ln["text"]
@@ -476,7 +530,7 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
             if full_name and text.lower() == full_name.lower():
                 continue
             if sum(c.isalpha() for c in text) >= 10:
-                programme = text.title()
+                programme = text
                 break
 
     prog_value = _from_label(
@@ -488,7 +542,7 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
         seed = {"text": prog_value["text"], "conf": prog_value["conf"],
                 "y": prog_value["y"], "h": prog_value.get("h", 20.0)}
         extra = [ln for ln in lines if _looks_like_programme(ln["text"])]
-        programme = _join_programme_block([seed] + extra).title()
+        programme = _join_programme_block([seed] + extra)
 
     chinese_name = _find_chinese_name(lines)
     cn_line = _from_label(
@@ -542,7 +596,14 @@ def parse_permit_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, 
         and sum(c.isalpha() for c in t) >= 3,
     )
     if en is not None:
-        english_name = en["text"]
+        english_name = _normalize_name_text(en["text"])
+    if not english_name:
+        cn_anchor = _from_label(
+            lines,
+            "chinese_name",
+            lambda t: bool(re.search(r"[\u4e00-\u9fff]{2,4}", t)),
+        )
+        english_name = _latin_name_near_cjk(lines, cn_anchor)
     if not english_name:
         english_name = _find_english_name(lines)
 

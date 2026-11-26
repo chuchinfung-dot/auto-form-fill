@@ -152,7 +152,7 @@ def _render_inputs() -> None:
         with c1:
             try_detect = st.checkbox("Auto-detect / crop regions", value=True)
         with c2:
-            run_btn = st.button("Process & fill form", type="primary", use_container_width=True)
+            run_btn = st.button("Process & fill form", type="primary", width="stretch")
 
         if run_btn:
             card_bgr = _bytes_to_bgr(card_file)
@@ -188,7 +188,7 @@ def _render_inputs() -> None:
         st.caption("Uses the browser camera if available on this Mac.")
         cam_card = st.camera_input("Capture student card")
         cam_permit = st.camera_input("Capture Home Return Permit")
-        if st.button("Use webcam captures", use_container_width=True):
+        if st.button("Use webcam captures", width="stretch"):
             card_bgr = None
             permit_bgr = None
             if cam_card is not None:
@@ -209,10 +209,10 @@ def _render_inputs() -> None:
 
     if st.session_state.card_rgb is not None:
         st.markdown("**Student-card crop used for OCR**")
-        st.image(st.session_state.card_rgb, use_container_width=True)
+        st.image(st.session_state.card_rgb, width="stretch")
     if st.session_state.permit_rgb is not None:
         st.markdown("**Permit crop used for OCR**")
-        st.image(st.session_state.permit_rgb, use_container_width=True)
+        st.image(st.session_state.permit_rgb, width="stretch")
     if st.session_state.raw_lines_card:
         with st.expander("Raw OCR lines — student card"):
             for line in st.session_state.raw_lines_card:
@@ -270,7 +270,7 @@ def _render_form() -> None:
         data=html.encode("utf-8"),
         file_name="student_registration_form.html",
         mime="text/html",
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -310,7 +310,7 @@ def _render_comparison() -> None:
         }
         for r in results
     ]
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width="stretch", hide_index=True)
 
     if summary["all_consistent"]:
         st.markdown(
@@ -347,8 +347,8 @@ def main() -> None:
     _render_comparison()
 
     st.caption(
-        "MVP: OpenCV crop + EasyOCR (EN + Traditional Chinese) + field comparison. "
-        "Edit any field before exporting. First OCR run may take a minute while models download."
+        "MVP: OpenCV preprocessing + RapidOCR (PP-OCRv4) + layout-aware parsing + "
+        "field comparison. Edit any field before exporting."
     )
 
 

@@ -110,7 +110,44 @@ class TestLayoutParsing(unittest.TestCase):
         self.assertEqual(parsed["given_name"], "Long Yin")
         self.assertEqual(parsed["chinese_name"], "蘇朗言")
         self.assertEqual(parsed["student_number"], "S1234567")
-        self.assertEqual(parsed["programme"], "Higher Diploma In Information Technology")
+        self.assertEqual(parsed["programme"], "HIGHER DIPLOMA IN INFORMATION TECHNOLOGY")
+
+    def test_unlabelled_card_anchors_latin_name_on_chinese(self):
+        # Real IVE cards print no "Name" label: SO Long Yin sits above 蘇朗言.
+        rows = _mk_ocr([
+            ("SO LongYin", 600, 100, 350, 65, 0.94),
+            ("CARD", 1380, 110, 65, 240, 0.99),
+            ("STUDENT", 1444, 140, 60, 370, 0.98),
+            ("蘇朗言", 608, 166, 175, 60, 0.92),
+            ("Higher Diploma in Computer", 596, 341, 548, 55, 0.98),
+            ("and Electronic Engineering", 592, 390, 520, 59, 0.97),
+            ("21882501958355", 149, 667, 442, 50, 1.00),
+            ("EG114403", 770, 678, 204, 40, 1.00),
+        ])
+        parsed = parse_card_fields(rows)
+        self.assertEqual(parsed["surname"], "So")
+        self.assertEqual(parsed["given_name"], "Long Yin")
+        self.assertEqual(parsed["chinese_name"], "蘇朗言")
+        self.assertEqual(
+            parsed["programme"],
+            "Higher Diploma in Computer and Electronic Engineering",
+        )
+
+    def test_permit_unlabelled_english_name_below_chinese(self):
+        # Real permits print 苏朗言 then SO, LONG YIN with no field label.
+        rows = _mk_ocr([
+            ("港澳居民来往内地通行证", 300, 85, 880, 95, 0.99),
+            ("苏朗言", 478, 232, 215, 70, 0.98),
+            ("SO,LONG YIN", 472, 305, 440, 65, 0.94),
+            ("出生日期", 477, 376, 134, 44, 1.00),
+            ("2005.09.29", 478, 425, 362, 59, 0.99),
+            ("证件号码", 490, 704, 136, 37, 1.00),
+            ("H61089371", 500, 764, 396, 62, 1.00),
+        ])
+        parsed = parse_permit_fields(rows)
+        self.assertEqual(parsed["chinese_name"], "苏朗言")
+        self.assertEqual(parsed["english_name"], "SO LONG YIN")
+        self.assertEqual(parsed["permit_number"], "H61089371")
 
     def test_permit_english_name_from_label_row(self):
         rows = _mk_ocr([
