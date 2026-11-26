@@ -68,6 +68,16 @@ CHINESE_LABEL_WORDS = {
     "中文名", "往来内地通行证", "港澳居民",
 }
 
+# Words that appear on cards as labels. OCR fragments of these ("Tudent" from
+# "Student") must not be mistaken for a person's name.
+LABEL_WORDS = {
+    "student", "name", "card", "programme", "program", "permit", "holder",
+    "identity", "number", "valid", "expiry", "issue", "institute",
+    "vocational", "education", "surname", "given", "chinese", "english",
+    "birth", "date", "gender", "home", "return", "travel", "undertaking",
+    "through", "registrar", "faculty", "department", "campus",
+}
+
 # Lines that are field labels, not values.
 _LABEL_ONLY = {
     "programme",
@@ -127,6 +137,37 @@ def _collect_lines(ocr_results: list[tuple[Any, str, float]]) -> list[dict[str, 
     return lines
 
 
+def _within_one_edit(a: str, b: str) -> bool:
+    """True when a and b differ by at most one insert/delete/substitute."""
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = j = 0
+    edits = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(a) == len(b):
+            i += 1
+            j += 1
+        else:
+            j += 1
+    return edits + (len(b) - j) <= 1
+
+
+def _is_label_like(word: str) -> bool:
+    w = word.lower()
+    if len(w) < 4:
+        return False
+    return any(_within_one_edit(w, lbl) for lbl in LABEL_WORDS)
+
+
 def _looks_like_name(text: str) -> bool:
     t = _clean(text)
     if len(t) < 3 or len(t) > 60:
@@ -146,6 +187,10 @@ def _looks_like_name(text: str) -> bool:
         return False
     # "TECHNOLOGY", "INFORMATION" are programme words, not surnames.
     if any(h in t.lower() for h in PROGRAMME_HINTS):
+        return False
+    # A lone word that is (nearly) a field label is an OCR fragment, e.g.
+    # "Tudent" cut from "Student".
+    if len(words) == 1 and _is_label_like(words[0]):
         return False
     return all(w.replace("-", "").replace("'", "").isascii() and
                w.replace("-", "").replace("'", "").isalpha() for w in words)

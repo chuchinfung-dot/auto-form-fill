@@ -43,6 +43,19 @@ class TestCompare(unittest.TestCase):
         statuses = {r["field"]: r["status"] for r in compare_documents(student, permit)}
         self.assertEqual(statuses["English name"], "match")
 
+    def test_traditional_and_simplified_names_match(self):
+        student = {"surname": "SO", "given_name": "Long Yin", "chinese_name": "蘇朗言"}
+        permit = {"english_name": "SO LONG YIN", "chinese_name": "苏朗言"}
+        rows = {r["field"]: r for r in compare_documents(student, permit)}
+        self.assertEqual(rows["Chinese name"]["status"], "match")
+        self.assertTrue(rows["Chinese name"]["note"])
+
+    def test_different_chinese_names_still_mismatch(self):
+        student = {"surname": "", "given_name": "", "chinese_name": "蘇朗言"}
+        permit = {"english_name": "", "chinese_name": "陳大明"}
+        rows = {r["field"]: r for r in compare_documents(student, permit)}
+        self.assertEqual(rows["Chinese name"]["status"], "mismatch")
+
     def test_summary_lists_missing(self):
         student = {
             "surname": "",
@@ -96,6 +109,12 @@ class TestPermitParse(unittest.TestCase):
         self.assertFalse(_looks_like_name("TECHNOLOGY"))
         self.assertFalse(_looks_like_name("INFORMATION"))
         self.assertTrue(_looks_like_name("CHAN TAI MAN"))
+
+    def test_label_fragment_is_not_a_name(self):
+        # "Tudent" is "Student" read with the first letter clipped.
+        self.assertFalse(_looks_like_name("Tudent"))
+        self.assertFalse(_looks_like_name("Permlt"))
+        self.assertTrue(_looks_like_name("SO LONG YIN"))
 
     def test_cjk_line_is_not_an_english_name(self):
         # "出生日期DOB" is a label, not a name.

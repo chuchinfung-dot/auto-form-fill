@@ -9,6 +9,7 @@ Upload a **Home Return Permit (回鄉證)** and an **IVE student card** → Open
   - Home Return Permit → Chinese name, English name, permit number, date of birth, gender.
 - OpenCV preprocessing for OCR: denoise, 2x upscale, CLAHE contrast.
 - Compare shared fields (English name, Chinese name) and flag **match / mismatch / missing**.
+- Treat Traditional and Simplified spellings of the same name as a match (via `zhconv`).
 - Flag low-confidence OCR values for human review.
 - Completeness summary listing missing or unreadable fields.
 - Editable form + printable HTML export.
@@ -46,5 +47,6 @@ OCR runs on CPU through onnxruntime; models ship with the package.
 ## Test
 
 ```bash
-python3 -m unittest test_compare -v
+source .venv/bin/activate
+python -m unittest test_compare -v
 ```

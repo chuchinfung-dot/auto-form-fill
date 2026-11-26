@@ -306,6 +306,7 @@ def _render_comparison() -> None:
             "Student card": r["student"],
             "Permit": r["permit"],
             "Status": STATUS_LABELS.get(r["status"], r["status"]),
+            "Note": r.get("note", ""),
         }
         for r in results
     ]

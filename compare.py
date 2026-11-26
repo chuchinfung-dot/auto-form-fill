@@ -5,6 +5,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from zhconv import convert as _zh_convert
+
+
+def to_simplified(text: str) -> str:
+    """Fold Traditional/Simplified variants to one script for comparison."""
+    return _zh_convert(text, "zh-hans")
+
 
 STATUS_LABELS = {
     "match": "✅ Match",
@@ -18,6 +25,8 @@ STATUS_LABELS = {
 def _normalize(value: str) -> str:
     if not value:
         return ""
+    # 蘇朗言 and 苏朗言 are the same name written in different scripts.
+    value = to_simplified(value)
     return re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", value.lower())
 
 
@@ -38,6 +47,15 @@ def _compare_value(student_val: str, permit_val: str) -> str:
     return "match" if a == b else "mismatch"
 
 
+def _script_note(student_val: str, permit_val: str) -> str:
+    """Explain a match that only held after folding Traditional/Simplified."""
+    if (student_val or "").strip() == (permit_val or "").strip():
+        return ""
+    if to_simplified(student_val or "") == to_simplified(permit_val or ""):
+        return "same name, Traditional/Simplified variants"
+    return ""
+
+
 def compare_documents(
     student: dict[str, Any], permit: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -50,12 +68,18 @@ def compare_documents(
             "status": _compare_value(
                 _english_name(student), permit.get("english_name", "")
             ),
+            "note": _script_note(
+                _english_name(student), permit.get("english_name", "")
+            ),
         },
         {
             "field": "Chinese name",
             "student": student.get("chinese_name", ""),
             "permit": permit.get("chinese_name", ""),
             "status": _compare_value(
+                student.get("chinese_name", ""), permit.get("chinese_name", "")
+            ),
+            "note": _script_note(
                 student.get("chinese_name", ""), permit.get("chinese_name", "")
             ),
         },
