@@ -149,6 +149,28 @@ class TestLayoutParsing(unittest.TestCase):
         self.assertEqual(parsed["english_name"], "SO LONG YIN")
         self.assertEqual(parsed["permit_number"], "H61089371")
 
+    def test_programme_wrapped_line_without_keyword_is_absorbed(self):
+        # The second line ("Administration") carries no programme keyword;
+        # continuation is decided by layout, not by matching a hint.
+        rows = _mk_ocr([
+            ("LEE Siu Ming", 620, 105, 400, 60, 0.97),
+            ("李小明", 622, 178, 200, 60, 0.95),
+            ("Higher Diploma in Business", 630, 400, 620, 50, 0.99),
+            ("Administration", 628, 462, 330, 50, 1.00),
+            ("Valid Through 08.2028 Full Time", 300, 700, 620, 40, 0.99),
+        ])
+        parsed = parse_card_fields(rows)
+        self.assertEqual(parsed["programme"], "Higher Diploma in Business Administration")
+
+    def test_name_split_across_two_boxes_is_joined(self):
+        rows = _mk_ocr([
+            ("LEE, SIU N", 470, 340, 500, 60, 0.92),
+            ("MING", 990, 341, 200, 60, 0.99),
+            ("李小明", 470, 250, 200, 68, 0.98),
+        ])
+        parsed = parse_permit_fields(rows)
+        self.assertEqual(parsed["english_name"], "LEE SIU N MING")
+
     def test_permit_english_name_from_label_row(self):
         rows = _mk_ocr([
             ("往來內地通行證", 40, 20, 320, 40, 0.95),

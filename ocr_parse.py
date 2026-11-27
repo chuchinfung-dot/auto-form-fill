@@ -379,7 +379,17 @@ def _latin_name_near_cjk(
     if not cands:
         return ""
     cands.sort(key=lambda x: x[0])
-    return cands[0][2]
+    best = cands[0][1]
+
+    # A name can be split across several boxes on the same row.
+    row = [
+        ln
+        for ln in lines
+        if _row_overlap(best, ln) > 0.5 and _looks_like_name(ln["text"])
+    ]
+    row.sort(key=lambda ln: ln.get("x0", 0))
+    texts = [_normalize_name_text(ln["text"]) for ln in row]
+    return " ".join(t for t in texts if t)
 
 
 def _find_english_name(lines: list[dict[str, Any]]) -> str:
@@ -442,26 +452,65 @@ def _conf_for(value: str, lines: list[dict[str, Any]], default: float = 0.0) -> 
     return min(confs) if confs else default
 
 
-def _join_programme_block(cands: list[dict[str, Any]]) -> str:
-    """A programme title may wrap across lines; join the strongest block."""
-    heights = sorted(c["h"] for c in cands if c.get("h"))
-    line_h = heights[len(heights) // 2] if heights else 20.0
-    # Wrapped lines sit closer than field rows but detection boxes under-report
-    # height on tilted/skewed crops, so stay generous. Only programme-like
-    # lines are candidates, so over-merging other fields is not possible.
-    max_gap = max(line_h * 4.0, 60.0)
-    ordered = sorted(cands, key=lambda x: x["y"])
+def _absorb_continuation(primary: dict[str, Any], lines: list[dict[str, Any]]) -> str:
+    """Grow a value downward while the next row still belongs to it.
+
+    Programme titles wrap, and the wrapped line ("Administration") often
+    carries no keyword to match on, so continuation is decided by layout:
+    same left edge, next row, similar size.
+    """
+    line_h = _line_height(lines)
+    max_step = max(line_h * 2.5, 60.0)
+    primary_x = primary.get("x0", 0.0)
+    tol = max(abs(primary.get("x1", 0.0) - primary_x) * 0.25, 40.0)
+
+    ordered = sorted(lines, key=lambda ln: ln.get("y0", ln["y"]))
+    try:
+        idx = ordered.index(primary)
+    except ValueError:
+        return primary["text"]
+
+    parts = [primary["text"]]
+    cursor = primary
+    for ln in ordered[idx + 1:]:
+        step = ln.get("y0", ln["y"]) - cursor.get("y0", cursor["y"])
+        if not (0 < step < max_step):
+            break
+        if abs(ln.get("x0", 0.0) - primary_x) > tol:
+            break
+        text = ln["text"]
+        if SKIP_LINE_PATTERNS.search(text):
+            break
+        if _clean(text).lower().strip(" .:") in _LABEL_ONLY:
+            break
+        if re.fullmatch(r"[\d\s.:\-/]+", text):
+            break
+        parts.append(text)
+        cursor = ln
+    return " ".join(parts)
+
+
+def _programme_from(lines: list[dict[str, Any]]) -> str:
+    cands = [ln for ln in lines if _looks_like_programme(ln["text"])]
+    if not cands:
+        return ""
+    line_h = _line_height(lines)
+    max_step = max(line_h * 2.5, 60.0)
+
+    ordered = sorted(cands, key=lambda ln: ln.get("y0", ln["y"]))
     blocks: list[list[dict[str, Any]]] = [[ordered[0]]]
     for ln in ordered[1:]:
-        if 0 < ln["y"] - blocks[-1][-1]["y"] < max_gap:
+        step = ln.get("y0", ln["y"]) - blocks[-1][-1].get("y0", blocks[-1][-1]["y"])
+        if 0 < step < max_step:
             blocks[-1].append(ln)
         else:
             blocks.append([ln])
+
     best = max(
         blocks,
         key=lambda b: sum(len(x["text"]) for x in b) * max(x["conf"] for x in b),
     )
-    return " ".join(x["text"] for x in best)
+    return _absorb_continuation(best[0], lines)
 
 
 def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, str]:
@@ -514,11 +563,8 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
     full_name = _normalize_name_text(full_name)
     surname, given = split_name(full_name)
 
-    programme = ""
-    prog_cands = [ln for ln in lines if _looks_like_programme(ln["text"])]
-    if prog_cands:
-        programme = _join_programme_block(prog_cands)
-    else:
+    programme = _programme_from(lines)
+    if not programme:
         for ln in sorted(lines, key=lambda x: (-len(x["text"]), -x["conf"])):
             text = ln["text"]
             if SKIP_LINE_PATTERNS.search(text):
@@ -539,10 +585,7 @@ def parse_card_fields(ocr_results: list[tuple[Any, str, float]]) -> dict[str, st
         lambda t: _clean(t).lower().strip(" .:") not in _LABEL_ONLY and len(t) >= 4,
     )
     if prog_value is not None:
-        seed = {"text": prog_value["text"], "conf": prog_value["conf"],
-                "y": prog_value["y"], "h": prog_value.get("h", 20.0)}
-        extra = [ln for ln in lines if _looks_like_programme(ln["text"])]
-        programme = _join_programme_block([seed] + extra)
+        programme = _absorb_continuation(prog_value, lines)
 
     chinese_name = _find_chinese_name(lines)
     cn_line = _from_label(
